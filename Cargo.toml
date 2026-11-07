@@ -1,0 +1,31 @@
+[package]
+name = "ysnap"
+version = "0.1.0"
+edition = "2021"
+description = "Pixel-art screenshot tool for niri: area, window, screen, markup, OCR"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "ysnap"
+path = "src/main.rs"
+
+[dependencies]
+ysnap-px = { path = "px" }
+smithay-client-toolkit = "0.20"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+calloop-wayland-source = "0.4"
+calloop = "0.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+libc = "0.2"
+
+# свой проект, не член workspace шелла: собирается в shell/snap/target
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

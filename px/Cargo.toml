@@ -1,0 +1,15 @@
+[package]
+name = "ysnap-px"
+version = "0.1.0"
+edition = "2021"
+description = "Pixel canvas, fonts, theme and immediate-mode UI for ysnap"
+license = "MIT"
+publish = false
+
+[dependencies]
+ab_glyph = "0.2"
+resvg = { version = "0.45", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = "1"
+serde_json = "1"
+libc = "0.2"
