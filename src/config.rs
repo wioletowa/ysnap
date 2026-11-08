@@ -7,7 +7,7 @@
 //   screenshotPath  куда сохранять: шаблон strftime, как screenshot-path у niri (%d %m %y %Y %H %M %S…)
 //
 //   { "save": "both", "screenshotPath": "~/Pictures/Screenshot/%d-%m-%y %H-%M-%S.png",
-//     "shotLoupe": true, "shotNotify": true, "shotConfirm": "enter", "lang": "",
+//     "shotLoupe": true, "shotNotify": true, "showPointer": true, "shotConfirm": "enter", "lang": "",
 //     "recentColors": ["#e02424"] }
 
 use crate::gfx::C;
@@ -56,6 +56,8 @@ pub struct Settings {
     pub path: String,
     pub shot_loupe: bool,
     pub shot_notify: bool,
+    /// курсор на снимке
+    pub show_pointer: bool,
     /// "enter" — выделил, потом enter; "instant" — выделил, и снимок готов
     pub shot_confirm: String,
     /// недавние цвета, новые — первыми
@@ -88,6 +90,7 @@ pub fn create_template() {
     put("screenshotPath", hint("путь файла: шаблон strftime, как screenshot-path у niri (%d %m %y %Y %H %M %S); ~ — домашняя папка", "file path: a strftime template like niri's screenshot-path (%d %m %y %Y %H %M %S); ~ is home"), S(DEFAULT_PATH.into()));
     put("shotConfirm", hint("enter — выделил, потом Enter; instant — отпустил мышь, и снимок готов", "enter — select, then press Enter; instant — the shot is taken when you release the mouse"), S("enter".into()));
     put("shotLoupe", hint("лупа у курсора (пробел переключает и запоминает)", "magnifier next to the cursor (space toggles and remembers it)"), Bool(true));
+    put("showPointer", hint("курсор на снимке", "mouse pointer in the shot"), Bool(true));
     put("shotNotify", hint("уведомление после снимка (notify-send)", "notification after a shot (notify-send)"), Bool(true));
     put("lang", hint("язык: пусто — как в системе, иначе ru, en, pt-BR", "language: empty — system, or ru, en, pt-BR"), S(String::new()));
     put("accent", hint("цвета берутся из ~/.config/gtk-4.0/gtk.css; accent (#rrggbb) и light — только если там палитры нет", "colours come from ~/.config/gtk-4.0/gtk.css; accent (#rrggbb) and light are used only when it has no palette"), S(String::new()));
@@ -168,6 +171,7 @@ impl Settings {
             path: if p.trim().is_empty() { DEFAULT_PATH.into() } else { p },
             shot_loupe: b("shotLoupe", true),
             shot_notify: b("shotNotify", true),
+            show_pointer: b("showPointer", true),
             shot_confirm: if s("shotConfirm") == "instant" { "instant".into() } else { "enter".into() },
             recent,
         }

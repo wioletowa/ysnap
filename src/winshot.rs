@@ -414,14 +414,15 @@ pub fn compose(win: &image::RgbaImage, d: &Deco, k: f32) -> image::RgbaImage {
 
 // ── снимок ─────────────────────────────────────────────────────────────────
 /// окно id (или в фокусе) с украшениями — PNG
-pub fn capture(id: Option<u64>) -> Result<Vec<u8>, String> {
+/// pointer — курсор на снимке (niri кладёт его, только если он над окном)
+pub fn capture(id: Option<u64>, pointer: bool) -> Result<Vec<u8>, String> {
     use image::ImageEncoder as _;
     let win = id.and_then(by_id).or_else(focused).ok_or_else(|| crate::tf!("нет окна в фокусе", "no focused window", "nenhuma janela em foco"))?;
     // снимок окна — только в свой каталог 0700
     let dir = ysnap_px::paths::private_tmp("ysnap-win").map_err(|e| e.to_string())?;
     let file = dir.join("window.png");
     let st = std::process::Command::new("niri")
-        .args(["msg", "action", "screenshot-window", "--id", &win.id.to_string(), "--write-to-disk", "true", "--path"])
+        .args(["msg", "action", "screenshot-window", "--id", &win.id.to_string(), "--write-to-disk", "true", "--show-pointer", if pointer { "true" } else { "false" }, "--path"])
         .arg(&file)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -452,10 +453,11 @@ impl App {
         let (copy, save) = (self.st.set.save.copy(), self.st.set.save.file());
         let (dir, name) = self.st.set.target();
         let notify = self.st.set.shot_notify;
+        let pointer = self.st.set.show_pointer;
         let tx = self.tx.clone();
         self.jobs += 1;
         std::thread::spawn(move || {
-            let (path, err) = match capture(id) {
+            let (path, err) = match capture(id, pointer) {
                 Ok(png) => {
                     let path = save.then(|| dir.join(&name));
                     let err = crate::snap::store(&png, path.as_deref(), copy);

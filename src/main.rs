@@ -31,7 +31,7 @@ pub use ysnap_px::{font, gfx, icons, theme};
 
 use std::path::PathBuf;
 
-/// уведомление после закрытия оверлея (notify-send); open — файл для «открыть» и «в папке»
+/// уведомление после закрытия оверлея (notify-send); open — сохранённый файл (миниатюра)
 pub struct Note {
     pub summary: String,
     pub body: String,
@@ -109,40 +109,17 @@ fn single() -> Option<std::fs::File> {
     ok.then_some(f)
 }
 
-/// notify-send; у снимка в файле — миниатюра (сам файл) и действия «открыть» / «в папке». Ответа
-/// на действие ждёт фоновый sh в своей группе процессов (и не дольше EXPIRE): ysnap выходит
-/// сразу, и после каждого снимка не остаётся висеть процесс с оверлеем
+/// notify-send без кнопок; у снимка в файле — миниатюра (сам файл)
 fn notify(n: &Note) {
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    const EXPIRE: &str = "15000";
     if !which("notify-send") {
         eprintln!("ysnap: {} {}", n.summary, n.body);
         return;
     }
-    let Some(p) = &n.open else {
-        let _ = Command::new("notify-send").args(["-a", "ysnap", "--"]).arg(&n.summary).arg(&n.body).stdin(Stdio::null()).stderr(Stdio::null()).status();
-        return;
-    };
-    // --action появился в libnotify 0.7.10; старый notify-send — без кнопок
-    let actions = Command::new("notify-send").arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--action")).unwrap_or(false);
-    if !actions {
-        let _ = Command::new("notify-send").args(["-a", "ysnap", "-i"]).arg(p).arg("--").arg(&n.summary).arg(&n.body).stdin(Stdio::null()).stderr(Stdio::null()).status();
-        return;
+    let mut c = Command::new("notify-send");
+    c.args(["-a", "ysnap"]);
+    if let Some(p) = &n.open {
+        c.arg("-i").arg(p);
     }
-    // всё — аргументами ($1…$6), не в тексте скрипта: имя файла и заголовок не исполняются
-    let script = r#"a=$(notify-send -a ysnap -i "$1" -t "$6" --action=default="$2" --action=folder="$3" --wait -- "$4" "$5")
-case "$a" in default) exec xdg-open "$1" ;; folder) exec xdg-open "$(dirname -- "$1")" ;; esac"#;
-    let _ = Command::new("sh")
-        .args(["-c", script, "sh"])
-        .arg(p)
-        .args([i18n::tr("открыть"), i18n::tr("в папке")])
-        .arg(&n.summary)
-        .arg(&n.body)
-        .arg(EXPIRE)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn();
+    let _ = c.arg("--").arg(&n.summary).arg(&n.body).stdin(Stdio::null()).stderr(Stdio::null()).status();
 }

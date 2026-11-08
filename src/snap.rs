@@ -145,8 +145,13 @@ pub(crate) fn parse_ppm(b: &[u8]) -> Option<Img> {
     Some(Img { w, h, px })
 }
 
-pub fn grab(out: &str) -> Option<Img> {
-    let o = std::process::Command::new("grim").args(["-o", out, "-t", "ppm", "-"]).output().ok()?;
+/// монитор через grim (запасной путь снимка); cursor — с курсором (-c)
+pub fn grab(out: &str, cursor: bool) -> Option<Img> {
+    let mut c = std::process::Command::new("grim");
+    if cursor {
+        c.arg("-c");
+    }
+    let o = c.args(["-o", out, "-t", "ppm", "-"]).output().ok()?;
     if !o.status.success() {
         return None;
     }

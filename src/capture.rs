@@ -100,7 +100,7 @@ impl App {
                 let m = m.clone();
                 for name in &outs {
                     let Some(o) = self.outputs.outputs().find(|o| self.outputs.info(o).and_then(|i| i.name).as_deref() == Some(name)) else { continue };
-                    let obj = m.capture_output(0, &o, &self.qh, name.clone());
+                    let obj = m.capture_output(self.st.set.show_pointer as i32, &o, &self.qh, name.clone());
                     if let Some(p) = &mut self.pending {
                         p.frames.insert(name.clone(), Frame { obj, fmt: None, pool: None, buf: None, invert: false, done: None });
                     }
@@ -117,9 +117,10 @@ impl App {
     /// мониторы через grim в нити (запасной путь)
     fn grim(&mut self, outs: Vec<String>) {
         let tx = self.tx.clone();
+        let cursor = self.st.set.show_pointer;
         std::thread::spawn(move || {
             let imgs = std::thread::scope(|sc| {
-                let hs: Vec<_> = outs.iter().map(|o| sc.spawn(move || crate::snap::grab(o).map(|i| (o.clone(), i)))).collect();
+                let hs: Vec<_> = outs.iter().map(|o| sc.spawn(move || crate::snap::grab(o, cursor).map(|i| (o.clone(), i)))).collect();
                 hs.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
             });
             let _ = tx.send(Msg::Grabbed(imgs));
