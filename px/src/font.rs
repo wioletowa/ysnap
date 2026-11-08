@@ -77,11 +77,94 @@ fn fc_find(pattern: &str, want: Option<&str>) -> Option<(String, u32)> {
     if let Some(hit) = FOUND.lock().ok()?.iter().find(|(p, w, _)| (p.as_str(), w.as_deref()) == (pattern, want)).map(|x| x.2.clone()) {
         return Some(hit);
     }
-    let r = fc_match(pattern, want)?;
+    let key = format!("{pattern}\u{1}{}", want.unwrap_or(""));
+    let r = match disk::get(&key) {
+        Some(hit) => hit,
+        None => {
+            let r = fc_match(pattern, want);
+            disk::put(key, r.clone());
+            r
+        }
+    };
+    let r = r?;
     if let Ok(mut f) = FOUND.lock() {
         f.push((pattern.to_string(), want.map(str::to_string), r.clone()));
     }
     Some(r)
+}
+
+/// ответы fc-match между запусками (~/.cache/ysnap/fonts.json): процесс fc-match — ~10 мс, а
+/// шрифты нужны к первому кадру. Запоминаются и промахи. Кеш годен, пока не менялись шрифты и
+/// настройки fontconfig (отметка — самое позднее время изменения их папок)
+mod disk {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    type Hit = Option<(String, u32)>;
+
+    struct Disk {
+        stamp: u64,
+        map: HashMap<String, Hit>,
+        dirty: bool,
+    }
+
+    fn path() -> std::path::PathBuf {
+        crate::paths::cache_dir().join("ysnap/fonts.json")
+    }
+
+    fn stamp() -> u64 {
+        let home = crate::paths::home();
+        let dirs = [crate::paths::cache_dir().join("fontconfig"), "/var/cache/fontconfig".into(), crate::paths::config_dir().join("fontconfig"), "/etc/fonts".into(), "/etc/fonts/conf.d".into(), crate::paths::data_dir().join("fonts"), home.join(".fonts"), "/usr/share/fonts".into(), "/usr/local/share/fonts".into()];
+        dirs.iter().filter_map(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok()).filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).max().unwrap_or(0)
+    }
+
+    fn disk() -> &'static Mutex<Disk> {
+        static D: OnceLock<Mutex<Disk>> = OnceLock::new();
+        D.get_or_init(|| {
+            let stamp = stamp();
+            let v: serde_json::Value = std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            let mut map = HashMap::new();
+            if v["stamp"].as_u64() == Some(stamp) {
+                for (k, e) in v["fonts"].as_object().into_iter().flatten() {
+                    let hit = e.as_array().and_then(|a| Some((a.first()?.as_str()?.to_string(), a.get(1)?.as_u64()? as u32)));
+                    map.insert(k.clone(), hit);
+                }
+            }
+            Mutex::new(Disk { stamp, map, dirty: false })
+        })
+    }
+
+    /// Some — ответ есть (Some(None) — запомненный промах); файл шрифта пропал — нет ответа
+    pub fn get(key: &str) -> Option<Hit> {
+        let d = disk().lock().ok()?;
+        let hit = d.map.get(key)?.clone();
+        match &hit {
+            Some((f, _)) if !std::path::Path::new(f).exists() => None,
+            _ => Some(hit),
+        }
+    }
+
+    pub fn put(key: String, hit: Hit) {
+        if let Ok(mut d) = disk().lock() {
+            d.map.insert(key, hit);
+            d.dirty = true;
+        }
+    }
+
+    /// записать, если появились новые ответы
+    pub fn save() {
+        let Ok(mut d) = disk().lock() else { return };
+        if !d.dirty {
+            return;
+        }
+        d.dirty = false;
+        let fonts: serde_json::Map<String, serde_json::Value> = d.map.iter().map(|(k, h)| (k.clone(), h.as_ref().map(|(f, i)| serde_json::json!([f, i])).unwrap_or(serde_json::Value::Null))).collect();
+        let p = path();
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = crate::paths::write_atomic(&p, &serde_json::json!({ "stamp": d.stamp, "fonts": fonts }).to_string());
+    }
 }
 
 fn fc_match(pattern: &str, want: Option<&str>) -> Option<(String, u32)> {
@@ -145,6 +228,18 @@ impl Fonts {
         };
         // общее семейство (sans, serif) — что fontconfig даст; имя найденного может быть любым
         let generic = matches!(family.to_lowercase().as_str(), "sans" | "sans-serif" | "serif" | "monospace");
+        // fc-match — отдельный процесс (~10 мс): все запросы разом, дальше они берутся из FOUND
+        let custom_want = (!generic).then_some(family);
+        let mut asks: Vec<(&str, Option<&str>)> = vec![("Tiny5", Some("tiny5")), ("DotGothic16", Some("dotgothic")), ("Monocraft", Some("monocraft")), ("Terminess Nerd Font Mono", Some("terminess")), ("sans-serif:lang=ru", None), ("sans-serif:lang=ja", None), ("emoji", None)];
+        if !family.is_empty() && !family.eq_ignore_ascii_case("tiny5") {
+            asks.push((family, custom_want));
+        }
+        std::thread::scope(|sc| {
+            for (p, w) in asks {
+                sc.spawn(move || fc_find(p, w));
+            }
+        });
+        disk::save();
         let custom = if family.is_empty() || family.eq_ignore_ascii_case("tiny5") { None } else { add(family, (!generic).then_some(family), !generic && is_pixel_family(family), &mut srcs) };
         let tiny = add("Tiny5", Some("tiny5"), true, &mut srcs);
         if let (Some(c), Some(t)) = (custom, tiny) {

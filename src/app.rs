@@ -4,7 +4,7 @@
 // tesseract) — в нитях, ответы приходят каналом. Процесс выходит, когда оверлей закрыт и работы нет.
 
 use crate::config::Settings;
-use crate::gfx::{Canvas, Img, R};
+use crate::gfx::{Canvas, Img};
 use crate::snap::{Mode, Snap};
 use crate::ui::{Act, Cur, Ui, Zone};
 use crate::Note;
@@ -45,8 +45,10 @@ use ysnap_px::icons::Icons;
 use ysnap_px::theme::Theme;
 
 pub enum Msg {
-    /// снимки мониторов, окна видимых рабочих столов, режим, монитор и окно с фокусом
-    Snap(HashMap<String, Img>, Vec<(String, R, String)>, Mode, String, Option<u64>),
+    /// снимки мониторов через grim (capture.rs: запасной путь)
+    Grabbed(HashMap<String, Img>),
+    /// окна, монитор и окно с фокусом (niri::info)
+    Niri(crate::niri::Info),
     SnapDone { path: Option<PathBuf>, copied: bool, err: Option<String>, notify: bool },
     SnapText(bool, Option<String>),
 }
@@ -59,8 +61,20 @@ pub struct State {
     pub t: Theme,
 }
 
+/// шрифты грузятся в своей нити, пока снимается экран: нужны только к первому кадру
 pub struct Res {
-    pub fonts: Fonts,
+    fonts: Option<Fonts>,
+    loading: Option<std::thread::JoinHandle<Fonts>>,
+}
+
+impl Res {
+    pub fn fonts(&mut self) -> &mut Fonts {
+        if self.fonts.is_none() {
+            let f = self.loading.take().and_then(|h| h.join().ok()).unwrap_or_else(|| Fonts::with(""));
+            self.fonts = Some(f);
+        }
+        self.fonts.get_or_insert_with(|| Fonts::with(""))
+    }
 }
 
 pub struct Surf {
@@ -87,12 +101,12 @@ pub struct Mods {
 
 pub struct App {
     conn: Connection,
-    qh: QueueHandle<App>,
+    pub(crate) qh: QueueHandle<App>,
     registry: RegistryState,
     seat: SeatState,
-    outputs: OutputState,
+    pub(crate) outputs: OutputState,
     compositor: CompositorState,
-    shm: Shm,
+    pub(crate) shm: Shm,
     layer_shell: LayerShell,
     frac_mgr: Option<frac_mgr::WpFractionalScaleManagerV1>,
     viewporter: Option<wp_viewporter::WpViewporter>,
@@ -102,7 +116,7 @@ pub struct App {
     enter_serial: u32,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    handle: LoopHandle<'static, App>,
+    pub(crate) handle: LoopHandle<'static, App>,
     pub mods: Mods,
     pub surfs: HashMap<u32, Surf>,
     next_id: u32,
@@ -119,9 +133,14 @@ pub struct App {
     pub notes: Vec<Note>,
     /// `ysnap screen`: монитор в фокусе сразу, без оверлея
     pub instant: bool,
+    pub(crate) screencopy: Option<wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1>,
+    /// снимок в процессе (capture.rs)
+    pub(crate) pending: Option<crate::capture::Pending>,
+    /// YSNAP_TIMING: печатать, сколько мс от старта до снимка и первого кадра
+    timing: Option<Instant>,
 }
 
-pub fn run(t: Theme, set: Settings, fonts: Fonts, mode: Mode, delay: u32) -> (i32, Vec<Note>) {
+pub fn run(t0: Instant, t: Theme, set: Settings, fonts: std::thread::JoinHandle<Fonts>, mode: Mode, delay: u32) -> (i32, Vec<Note>) {
     let Ok(conn) = Connection::connect_to_env() else {
         eprintln!("ysnap: no Wayland display");
         return (1, vec![]);
@@ -164,13 +183,16 @@ pub fn run(t: Theme, set: Settings, fonts: Fonts, mode: Mode, delay: u32) -> (i3
         ptr: None,
         press: None,
         st: State { snap: None, started: Instant::now(), set, t },
-        res: Res { fonts },
+        res: Res { fonts: None, loading: Some(fonts) },
         icons: Icons::new(""),
         tx,
         waiting: false,
         jobs: 0,
         notes: vec![],
         instant: mode == Mode::Screen,
+        screencopy: globals.bind(&qh, 1..=3, ()).ok(),
+        pending: None,
+        timing: std::env::var_os("YSNAP_TIMING").map(|_| t0),
     };
     // имена и размеры мониторов (wl_output и xdg_output) — до первого снимка
     for _ in 0..2 {
@@ -207,7 +229,8 @@ pub fn run(t: Theme, set: Settings, fonts: Fonts, mode: Mode, delay: u32) -> (i3
 impl App {
     fn on_msg(&mut self, m: Msg) {
         match m {
-            Msg::Snap(imgs, wins, mode, focus, win) => self.on_snap_ready(imgs, wins, mode, focus, win),
+            Msg::Grabbed(imgs) => self.on_grabbed(imgs),
+            Msg::Niri(info) => self.on_niri(info),
             Msg::SnapDone { path, copied, err, notify } => {
                 self.jobs = self.jobs.saturating_sub(1);
                 self.on_snap_done(path, copied, err, notify);
@@ -216,6 +239,13 @@ impl App {
                 self.jobs = self.jobs.saturating_sub(1);
                 self.on_snap_text(qr, text);
             }
+        }
+    }
+
+    /// YSNAP_TIMING: этап и мс от старта процесса
+    pub(crate) fn timing(&mut self, what: &str) {
+        if let Some(t0) = self.timing {
+            eprintln!("ysnap: {what} at {} ms", t0.elapsed().as_millis());
         }
     }
 
@@ -308,7 +338,7 @@ impl App {
         let ptr = self.ptr.filter(|p| p.0 == id).map(|p| (p.1, p.2));
         let down = self.press.as_ref().is_some_and(|p| p.0 == id);
         {
-            let mut ui = Ui { cv: Canvas::new(buf, w, h), f: &mut self.res.fonts, ic: &mut self.icons, t: self.st.t, zones: vec![], ptr, down, anim: false, blink: false, tr: crate::i18n::tr };
+            let mut ui = Ui { cv: Canvas::new(buf, w, h), f: self.res.fonts(), ic: &mut self.icons, t: self.st.t, zones: vec![], ptr, down, anim: false, blink: false, tr: crate::i18n::tr };
             crate::snap::draw(&mut ui, &self.st, &s.output, w, h);
             s.zones = std::mem::take(&mut ui.zones);
             s.anim = ui.anim;
@@ -324,6 +354,10 @@ impl App {
         }
         let _ = buffer.attach_to(&surf);
         surf.commit();
+        if self.timing.is_some() {
+            self.timing("first frame");
+            self.timing = None;
+        }
     }
 
     fn zone_at(&self, id: u32, x: f64, y: f64) -> Option<Zone> {

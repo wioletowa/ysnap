@@ -15,6 +15,7 @@ ysnap-px = { path = "px" }
 smithay-client-toolkit = "0.20"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 calloop-wayland-source = "0.4"
 calloop = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

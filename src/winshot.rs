@@ -19,9 +19,6 @@ pub struct Win {
     pub w: f64,
 }
 
-fn niri_json(args: &[&str]) -> serde_json::Value {
-    std::process::Command::new("niri").args(["msg", "-j"]).args(args).output().ok().and_then(|o| serde_json::from_slice(&o.stdout).ok()).unwrap_or(serde_json::Value::Null)
-}
 
 fn win_of(v: &serde_json::Value) -> Option<Win> {
     Some(Win {
@@ -34,11 +31,11 @@ fn win_of(v: &serde_json::Value) -> Option<Win> {
 
 /// окно в фокусе niri
 pub fn focused() -> Option<Win> {
-    win_of(&niri_json(&["focused-window"]))
+    win_of(&crate::niri::request("FocusedWindow"))
 }
 
 fn by_id(id: u64) -> Option<Win> {
-    niri_json(&["windows"]).as_array()?.iter().find(|w| w["id"].as_u64() == Some(id)).and_then(win_of)
+    crate::niri::request("Windows").as_array()?.iter().find(|w| w["id"].as_u64() == Some(id)).and_then(win_of)
 }
 
 // ── разбор KDL ─────────────────────────────────────────────────────────────

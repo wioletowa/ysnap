@@ -14,7 +14,7 @@ use smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -153,19 +153,8 @@ pub fn grab(out: &str) -> Option<Img> {
     parse_ppm(&o.stdout)
 }
 
-/// монитор с фокусом niri ("" — niri не ответил)
-pub(crate) fn niri_focus() -> String {
-    let o = std::process::Command::new("niri").args(["msg", "-j", "focused-output"]).output().ok();
-    o.and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok()).and_then(|v| v["name"].as_str().map(str::to_string)).unwrap_or_default()
-}
-
 /// окна видимых рабочих столов в координатах их мониторов
-pub(crate) fn niri_windows() -> Vec<(String, R, String)> {
-    let run = |what: &str| -> serde_json::Value {
-        std::process::Command::new("niri").args(["msg", "-j", what]).output().ok().and_then(|o| serde_json::from_slice(&o.stdout).ok()).unwrap_or(serde_json::Value::Null)
-    };
-    let ws = run("workspaces");
-    let wins = run("windows");
+pub(crate) fn niri_windows(ws: &serde_json::Value, wins: &serde_json::Value) -> Vec<(String, R, String)> {
     let mut active: HashMap<u64, String> = HashMap::new();
     for w in ws.as_array().into_iter().flatten() {
         if w["is_active"].as_bool().unwrap_or(false) {
@@ -293,35 +282,6 @@ pub(crate) fn pick_save(dir: &std::path::Path, name: &str) -> Picked {
 
 
 impl App {
-    /// начать: таймер (если есть) → снимок всех мониторов в нити → оверлей
-    pub fn snap_start(&mut self, mode: Mode, delay: u32) {
-        if self.st.snap.is_some() || self.waiting {
-            return;
-        }
-        let outs = self.output_names();
-        let tx = self.tx.clone();
-        self.waiting = true;
-        // экран без оверлея: нужен только монитор в фокусе — ни остальных мониторов, ни окон
-        let only_focus = mode == Mode::Screen && (self.instant || self.st.set.shot_confirm == "instant");
-        std::thread::spawn(move || {
-            if delay > 0 {
-                std::thread::sleep(Duration::from_secs(delay as u64));
-            } else {
-                // меню, из которого запустили, успевает исчезнуть
-                std::thread::sleep(Duration::from_millis(60));
-            }
-            let focus = niri_focus();
-            if only_focus && outs.contains(&focus) {
-                let imgs: HashMap<String, Img> = grab(&focus).map(|i| (focus.clone(), i)).into_iter().collect();
-                let _ = tx.send(Msg::Snap(imgs, vec![], mode, focus, None));
-                return;
-            }
-            let imgs: HashMap<String, Img> = outs.iter().filter_map(|o| grab(o).map(|i| (o.clone(), i))).collect();
-            let wins = niri_windows();
-            let _ = tx.send(Msg::Snap(imgs, wins, mode, focus, crate::winshot::focused().map(|w| w.id)));
-        });
-    }
-
     pub fn on_snap_ready(&mut self, imgs: HashMap<String, Img>, wins: Vec<(String, R, String)>, mode: Mode, focus: String, focus_win: Option<u64>) {
         self.waiting = false;
         if imgs.is_empty() {
@@ -730,7 +690,7 @@ impl App {
             let mut cv = Canvas::new(&mut buf, w, h);
             cv.blit(&img, -x0, -y0);
             for m in &sn.marks {
-                paint(&mut cv, &mut self.res.fonts, m, &img, (r.x, r.y), k, k, self.st.t.on_accent);
+                paint(&mut cv, self.res.fonts(), m, &img, (r.x, r.y), k, k, self.st.t.on_accent);
             }
         }
         let mut rgba = Vec::with_capacity(buf.len() * 4);

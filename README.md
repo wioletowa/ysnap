@@ -22,7 +22,9 @@ cargo build --release
 cp target/release/ysnap ~/.local/bin/
 ```
 
-Нужны `grim` и `wl-copy`. По желанию: `notify-send`, `tesseract`, `zbarimg`, `zenity` или `kdialog`.
+Нужен `wl-copy`. Экран снимается сам (wlr-screencopy), `grim` — запасной вариант. По желанию: `notify-send`, `tesseract`, `zbarimg`, `zenity` или `kdialog`.
+
+Без демона: от нажатия до оверлея ~30 мс (снимок через screencopy, niri через сокет, шрифты в фоне и с кешем).
 
 ## niri
 

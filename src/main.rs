@@ -1,22 +1,25 @@
-// ysnap — пиксельная скриншотилка для niri, отдельно от шелла: экран замораживается (grim),
-// поверх — оверлей на каждом мониторе: выделение, окно, экран, разметка, пипетка, текст (tesseract)
-// и QR (zbarimg). Готовое — в буфер (wl-copy) и/или в папку, уведомление — notify-send.
+// ysnap — пиксельная скриншотилка для niri: экран замораживается (wlr-screencopy, запасной путь —
+// grim), поверх — оверлей на каждом мониторе: выделение, окно, экран, разметка, пипетка, текст
+// (tesseract) и QR (zbarimg). Готовое — в буфер (wl-copy) и/или в папку, уведомление — notify-send.
+// Без демона: снимок, вопросы к niri (сокет) и шрифты (в нити, с кешем) идут параллельно.
 //
-//   ysnap [--delay N]          область: оверлей (Print)
-//   ysnap window               окно в фокусе с рамкой и тенью, сразу (как screenshot-window)
-//   ysnap screen               монитор в фокусе, сразу (как screenshot-screen)
-//   ysnap ocr FILE                           текст с картинки в stdout
-//   ysnap theme                              какие цвета и шрифт взяты из системы
+//   ysnap [--delay N]   область: оверлей (Print)
+//   ysnap window        окно в фокусе с рамкой и тенью, сразу (как screenshot-window)
+//   ysnap screen        монитор в фокусе, сразу (как screenshot-screen)
+//   ysnap ocr FILE      текст с картинки в stdout
+//   ysnap theme         какие цвета и шрифт взяты из системы
 //
-// Нужны: grim, wl-copy; по желанию — notify-send, tesseract, zbarimg, zenity или kdialog («сохранить
-// как…»). Цвета и шрифт — системные (gtk.rs: gtk.css и gtk-font-name), настройки снимков —
-// ~/.config/ysnap.json (config.rs).
+// Нужен wl-copy; по желанию — notify-send, tesseract, zbarimg, zenity или kdialog («сохранить
+// как…»). Цвета и шрифт — системные (gtk.rs), настройки — ~/.config/ysnap.json (config.rs).
+// YSNAP_TIMING=1 — печатать, через сколько мс готовы снимок и первый кадр.
 
 mod app;
 mod blur;
+mod capture;
 mod config;
 mod gtk;
 mod i18n;
+mod niri;
 mod ocr;
 mod re;
 mod snap;
@@ -40,6 +43,7 @@ pub fn which(exe: &str) -> bool {
 }
 
 fn main() {
+    let t0 = std::time::Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // первый запуск: конфиг с подсказками (на языке системы — свой язык ещё не прочитан)
     if !config::path().exists() {
@@ -69,13 +73,13 @@ fn main() {
         _ => {
             let set = config::Settings::from_json(&v);
             config::ensure(&v, &set);
-            shoot(&args, look, set)
+            shoot(t0, &args, look, set)
         }
     };
     std::process::exit(code);
 }
 
-fn shoot(args: &[String], look: ysnap_px::look::Look, set: config::Settings) -> i32 {
+fn shoot(t0: std::time::Instant, args: &[String], look: ysnap_px::look::Look, set: config::Settings) -> i32 {
     let mode = match args.iter().find(|a| !a.starts_with('-')).map(String::as_str) {
         Some("window") => snap::Mode::Window,
         Some("screen") => snap::Mode::Screen,
@@ -85,8 +89,9 @@ fn shoot(args: &[String], look: ysnap_px::look::Look, set: config::Settings) -> 
     // один оверлей за раз: второй Print, пока открыт первый, ничего не делает
     let Some(lock) = single() else { return 0 };
     let theme = gtk::theme().unwrap_or(look.theme);
-    let fonts = ysnap_px::font::Fonts::with(&gtk::font());
-    let (code, notes) = app::run(theme, set, fonts, mode, delay);
+    // шрифты (fontconfig) — в своей нити, параллельно со снимком экрана
+    let fonts = std::thread::spawn(|| ysnap_px::font::Fonts::with(&gtk::font()));
+    let (code, notes) = app::run(t0, theme, set, fonts, mode, delay);
     drop(lock);
     for n in notes {
         notify(&n);
