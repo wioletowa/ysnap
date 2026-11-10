@@ -399,18 +399,13 @@ impl App {
                 if on_btn {
                     return false;
                 }
+                // правая и прочие кнопки ничего не делают (отмена — Esc)
+                if button != 0x110 {
+                    return true;
+                }
                 // щелчок мимо меню цветов закрывает его, и только
                 if sn.menu {
                     sn.menu = false;
-                    return true;
-                }
-                if button == 0x111 {
-                    // ПКМ: снять выделение (метки остаются) / выйти
-                    if sn.sel.is_some() && sn.mode != Mode::Screen {
-                        sn.sel = None;
-                    } else {
-                        self.snap_close();
-                    }
                     return true;
                 }
                 let sel = sn.cur_sel(&out);
@@ -461,8 +456,11 @@ impl App {
                 }
                 true
             }
-            // отпускание
+            // отпускание: только левой (правая не обрывает начатое)
             _ => {
+                if button != 0x110 {
+                    return true;
+                }
                 let Some(d) = sn.drag.take() else { return false };
                 let picked = matches!(d, Drag::New(..));
                 if let Drag::New(x0, y0) = d {
